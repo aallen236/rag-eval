@@ -775,11 +775,29 @@ def make_arm(chunks):
     return records, build_index(records)
 
 def run_utility_eval(eval_set, records, index, defended=False, sandwich=False, force_all = False):
-    #pick top_k the same way run_injection_eval does
-    for case in eval_set:
-        outcome = rag_answer(case["query"], records, index, top_k=len(records) if force_all else case['top_k'], defended=defended, sandwich=sandwich)
-        
+    coverages = {}
+    answers = {}
 
+    for case in eval_set:
+        #pick top_k the same way run_injection_eval 
+        outcome = rag_answer(case["query"], records, index, top_k=len(records) if force_all else case['top_k'], defended=defended, sandwich=sandwich)
+        score = keyword_score(outcome["answer"], case["must_include"])
+       # coverages.append({case['id'] : score['coverage']})
+        coverages[case["id"]] = score["coverage"]
+        answers[case["id"]] = outcome["answer"]
+    return coverages, answers
+
+def print_utility(label, base: dict, sand: dict):
+    print(f"\n==== {label} ====")
+    print(f"{'case':<24}{'baseline':<12}{'sandwich':<12}")
+    for case_id in base:      
+        print(f"{case_id:<24}{base[case_id]:<12.2f}{sand[case_id]:<12.2f}")
+    b = sum(base.values()) / len(base)
+    s = sum(sand.values()) / len(base)
+    print(f"{'MEAN':<24}{b:<12.2f}{s:<12.2f}")
+    
+
+    
 
 
 if __name__ == "__main__":
@@ -788,6 +806,7 @@ if __name__ == "__main__":
     RUN_SUITE = False
     RUN_DEBUG = False
     RUN_INJECTION = True
+    RUN_KEYWORD_UTILITY = True
 
     no_overlap_runbook = chunk_by_paragraphs(document_text_runbook, max_tokens=60)
     with_overlap_runbook = chunk_by_paragraphs_with_overlap(document_text_runbook, max_tokens=60, overlap_tokens=55)
@@ -839,7 +858,21 @@ if __name__ == "__main__":
         print_injection("clean baseline", run_injection_eval(eval_set_runbook, *arms["no_overlap"],n=1, force_all=True)) #use no overlap because splitting sections would mess up injection test
         for name, text in INJECTIONS.items():
             records, index = build_poisoned_arm(text)
+            run_utility_eval(eval_set_runbook, records, index,  defended=True, sandwich=False, force_all=True)
             print_injection(f"poisoned: {name}", run_injection_eval(eval_set_runbook, records, index,n=1,force_all=True))
             print_injection(f"defended: {name}", run_injection_eval(eval_set_runbook, records, index, n=1, force_all=True, defended=True))
             print_injection(f"sandwich: {name}", run_injection_eval(eval_set_runbook, records, index, n=1, force_all=True, defended=True, sandwich=True))
-
+    if RUN_KEYWORD_UTILITY:
+        records, index = build_poisoned_arm(INJECTIONS["naive"])
+        diff_answers = 0
+        for force in (False, True):
+            base, base_answers = run_utility_eval(eval_set_runbook, records, index, force_all=force)
+            sand, sand_answers = run_utility_eval(eval_set_runbook, records, index,
+                                    defended=True, sandwich=True, force_all=force)
+            for case in base_answers:
+                if base_answers[case] != sand_answers[case]:
+                    diff_answers +=1
+             
+            print_utility(f"utility: force_all={force}", base, sand)
+            print(f"Different answers: {diff_answers}")
+        diff_answers = 0
